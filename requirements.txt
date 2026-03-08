@@ -1,0 +1,6 @@
+torch
+transformers
+accelerate
+Pillow
+sentencepiece
+safetensors

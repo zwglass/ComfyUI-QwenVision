@@ -1,0 +1,28 @@
+[tool.black]
+line-length = 79
+target-version = ["py310"]
+include = '\.pyi?$'
+exclude = '''
+/(
+    \.git
+  | \.venv
+  | venv
+  | build
+  | dist
+  | __pycache__
+)/
+'''
+
+[tool.isort]
+profile = "black"
+line_length = 79
+skip = [".venv", "venv", "build", "dist", "__pycache__"]
+
+[tool.ruff]
+line-length = 79
+target-version = "py310"
+exclude = [".venv", "venv", "build", "dist", "__pycache__"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E501"]
