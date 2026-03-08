@@ -1,22 +1,21 @@
 from __future__ import annotations
 
-import gc
+import os
 import time
 from dataclasses import dataclass
 from threading import Lock
 from typing import Dict
 
-import torch
-from transformers import AutoProcessor, AutoModelForImageTextToText, AutoModelForCausalLM
+from huggingface_hub import hf_hub_download
 
 
 @dataclass
 class QwenVisionModelHandle:
-    model: object
-    processor: object
-    model_id: str
-    device: str
-    dtype: str
+    model_path: str
+    mmproj_path: str
+    model_source: str
+    mmproj_source: str
+    cli_path: str
     cache_key: str
 
 
@@ -25,132 +24,126 @@ class ModelCacheManager:
         self._cache: Dict[str, dict] = {}
         self._lock = Lock()
 
-    def _make_cache_key(self, model_id: str, device: str, dtype: str) -> str:
-        return f"{model_id}|{device}|{dtype}"
+    def _make_cache_key(
+        self, model_source: str, mmproj_source: str, cli_path: str
+    ) -> str:
+        return f"{model_source}|{mmproj_source}|{cli_path}"
 
-    def _resolve_dtype(self, dtype: str):
-        if dtype == "float16":
-            return torch.float16
-        if dtype == "bfloat16":
-            return torch.bfloat16
-        if dtype == "float32":
-            return torch.float32
-        if torch.cuda.is_available():
-            return torch.float16
-        return torch.float32
-
-    def _resolve_device_map(self, device: str):
-        if device == "cpu":
-            return "cpu"
-        if device == "cuda":
-            return "cuda"
-        return "auto"
-
-    def _load_model_and_processor(self, model_id: str, device: str, dtype: str):
-        torch_dtype = self._resolve_dtype(dtype)
-        device_map = self._resolve_device_map(device)
-
-        processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
-
-        model = None
-        load_errors = []
-
-        # Prefer a multimodal-specific auto class first.
+    def _resolve_qwenvision_models_dir(self) -> str:
         try:
-            model = AutoModelForImageTextToText.from_pretrained(
-                model_id,
-                torch_dtype=torch_dtype,
-                device_map=device_map,
-                trust_remote_code=True,
+            import folder_paths
+
+            models_dir = os.path.join(folder_paths.models_dir, "qwenvision")
+        except Exception:
+            repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+            comfyui_root = os.path.abspath(os.path.join(repo_root, "..", ".."))
+            models_dir = os.path.join(comfyui_root, "models", "qwenvision")
+
+        os.makedirs(models_dir, exist_ok=True)
+        return models_dir
+
+    def _parse_hf_resolve_url(self, source: str):
+        # Example:
+        # https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct-GGUF/resolve/main/xxx.gguf
+        prefix = "https://huggingface.co/"
+        if not source.startswith(prefix):
+            return None
+
+        parts = source[len(prefix) :].split("/")
+        if len(parts) < 5:
+            return None
+        if parts[2] != "resolve":
+            return None
+
+        namespace = parts[0]
+        repo_name = parts[1]
+        revision = parts[3]
+        filename = "/".join(parts[4:])
+        repo_id = f"{namespace}/{repo_name}"
+        return repo_id, revision, filename, repo_name
+
+    def _resolve_source_to_local_file(self, source: str) -> str:
+        if os.path.isfile(source):
+            return source
+
+        parsed = self._parse_hf_resolve_url(source)
+        if parsed is None:
+            raise RuntimeError(
+                "Unsupported source. Use a local .gguf path or a huggingface "
+                "resolve URL."
             )
-        except Exception as e:
-            load_errors.append(f"AutoModelForImageTextToText failed: {e}")
 
-        # Fall back for models that expose multimodal support through CausalLM.
-        if model is None:
-            try:
-                model = AutoModelForCausalLM.from_pretrained(
-                    model_id,
-                    torch_dtype=torch_dtype,
-                    device_map=device_map,
-                    trust_remote_code=True,
-                )
-            except Exception as e:
-                load_errors.append(f"AutoModelForCausalLM failed: {e}")
+        repo_id, revision, filename, repo_name = parsed
+        local_dir = os.path.join(self._resolve_qwenvision_models_dir(), repo_name)
+        os.makedirs(local_dir, exist_ok=True)
 
-        if model is None:
-            joined = " | ".join(load_errors)
-            raise RuntimeError(f"Could not load model '{model_id}'. Details: {joined}")
+        return hf_hub_download(
+            repo_id=repo_id,
+            filename=filename,
+            revision=revision,
+            local_dir=local_dir,
+            local_dir_use_symlinks=False,
+        )
 
-        return model, processor, str(getattr(model, "device", device_map)), str(torch_dtype)
-
-    def get_or_load_model(self, model_id: str, device: str = "auto", dtype: str = "auto") -> QwenVisionModelHandle:
-        key = self._make_cache_key(model_id, device, dtype)
+    def get_or_load_model(
+        self,
+        model_source: str,
+        mmproj_source: str,
+        cli_path: str = "llama-mtmd-cli",
+    ) -> QwenVisionModelHandle:
+        key = self._make_cache_key(model_source, mmproj_source, cli_path)
 
         with self._lock:
             if key in self._cache:
                 self._cache[key]["last_used"] = time.time()
                 entry = self._cache[key]
                 return QwenVisionModelHandle(
-                    model=entry["model"],
-                    processor=entry["processor"],
-                    model_id=entry["model_id"],
-                    device=entry["device"],
-                    dtype=entry["dtype"],
+                    model_path=entry["model_path"],
+                    mmproj_path=entry["mmproj_path"],
+                    model_source=entry["model_source"],
+                    mmproj_source=entry["mmproj_source"],
+                    cli_path=entry["cli_path"],
                     cache_key=key,
                 )
 
-            model, processor, resolved_device, resolved_dtype = self._load_model_and_processor(
-                model_id=model_id,
-                device=device,
-                dtype=dtype,
-            )
+            model_path = self._resolve_source_to_local_file(model_source)
+            mmproj_path = self._resolve_source_to_local_file(mmproj_source)
 
             self._cache[key] = {
-                "model": model,
-                "processor": processor,
-                "model_id": model_id,
-                "device": resolved_device,
-                "dtype": resolved_dtype,
+                "model_path": model_path,
+                "mmproj_path": mmproj_path,
+                "model_source": model_source,
+                "mmproj_source": mmproj_source,
+                "cli_path": cli_path,
                 "last_used": time.time(),
             }
 
             return QwenVisionModelHandle(
-                model=model,
-                processor=processor,
-                model_id=model_id,
-                device=resolved_device,
-                dtype=resolved_dtype,
+                model_path=model_path,
+                mmproj_path=mmproj_path,
+                model_source=model_source,
+                mmproj_source=mmproj_source,
+                cli_path=cli_path,
                 cache_key=key,
             )
 
     def unload_by_key(self, cache_key: str) -> None:
         with self._lock:
-            entry = self._cache.pop(cache_key, None)
-            if entry is not None:
-                del entry
-        self.clear_cuda_cache()
+            self._cache.pop(cache_key, None)
 
     def unload_all(self) -> None:
         with self._lock:
-            keys = list(self._cache.keys())
-            for key in keys:
-                del self._cache[key]
             self._cache.clear()
-        self.clear_cuda_cache()
-
-    def clear_cuda_cache(self) -> None:
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
 
     def get_cache_status(self):
         with self._lock:
             return {
                 key: {
-                    "model_id": value["model_id"],
-                    "device": value["device"],
-                    "dtype": value["dtype"],
+                    "model_path": value["model_path"],
+                    "mmproj_path": value["mmproj_path"],
+                    "model_source": value["model_source"],
+                    "mmproj_source": value["mmproj_source"],
+                    "cli_path": value["cli_path"],
                     "last_used": value["last_used"],
                 }
                 for key, value in self._cache.items()

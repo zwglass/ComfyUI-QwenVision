@@ -1,27 +1,31 @@
 # ComfyUI-QwenVision
 
-ComfyUI custom nodes for local Qwen vision-language inference.
-
-- Local inference with `transformers`
-- Reusable model cache (loader/run/unload workflow)
-- Simple ComfyUI graph integration for image understanding tasks
+ComfyUI custom nodes for Qwen3-VL GGUF inference through `llama-mtmd-cli`.
 
 ## Features
 
-- `QwenVisionLoader`: load and cache model + processor
-- `QwenVisionRun`: run single-image inference with prompt
-- `QwenVisionUnload`: unload one model or clear all cached models
+- GGUF + `mmproj` model loader with local cache
+- Inference via subprocess (`llama-mtmd-cli`)
+- Image loader node with explicit `image_path` output
+- Automatic fallback: if `image_path` is missing, node saves a temp image
+
+## Included Nodes
+
+- `QwenVisionLoadImageWithPath`
+- `QwenVisionLoader`
+- `QwenVisionRun`
+- `QwenVisionUnload`
 
 ## Installation
 
-### 1. Install into ComfyUI custom nodes
+1. Clone into ComfyUI custom nodes:
 
 ```bash
 cd <ComfyUI_ROOT>/custom_nodes
 git clone https://github.com/zwglass/ComfyUI-QwenVision.git
 ```
 
-### 2. Install Python dependencies (recommended: uv)
+2. Install dependencies (recommended: `uv`):
 
 ```bash
 cd <ComfyUI_ROOT>/custom_nodes/ComfyUI-QwenVision
@@ -29,129 +33,51 @@ uv venv
 uv sync
 ```
 
-If you prefer manual install:
+3. Ensure `llama-mtmd-cli` is installed and in `PATH`:
 
 ```bash
-uv run pip install -r requirements.txt
+llama-mtmd-cli --help
 ```
-
-### 3. Restart ComfyUI
-
-After restart, search nodes under category `Qwen/Vision`.
 
 ## Model Download And Storage Path
 
-Models are loaded from Hugging Face Hub by `transformers`.
+Default auto-download model source:
 
-- Local model scan path for this node:
-  - `<ComfyUI_ROOT>/models/qwenvision/*`
-  - Only direct subfolders are listed as local model options.
-- Built-in downloadable model option:
-  - `Qwen/Qwen3.5-0.8B`
+- `https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct-GGUF/resolve/main/Qwen3VL-2B-Instruct-Q4_K_M.gguf`
 
-- Default cache path:
-  - `~/.cache/huggingface/hub`
-- You can change cache location via environment variables:
-  - `HF_HOME`
-  - `HUGGINGFACE_HUB_CACHE`
-  - `TRANSFORMERS_CACHE`
+Default auto-download mmproj source:
 
-Example (Linux/macOS):
+- `https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct-GGUF/resolve/main/mmproj-Qwen3VL-2B-Instruct-F16.gguf`
 
-```bash
-export HF_HOME=/data/hf_cache
-```
+Downloaded files are materialized under:
 
-Then restart ComfyUI and load model again.
+- `<ComfyUI_ROOT>/models/qwenvision/<repo_name>/...`
 
-## Manual Downloaded Models (Local Folder Convention)
+Local dropdown scan path:
 
-Manual local models are supported.
+- `<ComfyUI_ROOT>/models/qwenvision/**/*.gguf`
 
-- Save each model under:
-  - `<ComfyUI_ROOT>/models/qwenvision/<model_folder>`
-- Example:
-  - `<ComfyUI_ROOT>/models/qwenvision/Qwen3.5-0.8B`
-- In `QwenVisionLoader`, pick the model from dropdown.
-- Manual string/path input is intentionally disabled.
+## How Inference Works
 
-Required files are typically:
+1. `QwenVisionLoader` resolves GGUF/MMProj sources into local files.
+2. `QwenVisionRun` executes:
+   - `llama-mtmd-cli -m <model.gguf> --mmproj <mmproj.gguf> --image <path> -p <prompt> ...`
+3. Output text is returned to ComfyUI as `STRING`.
 
-- `config.json`
-- tokenizer/processor files (such as `tokenizer.json`, `tokenizer_config.json`, `preprocessor_config.json`)
-- model weights (such as `model.safetensors` or sharded `*.safetensors`)
+## Example Workflow
 
-If files are incomplete, loading will fail in `from_pretrained(...)`.
+Import:
 
-## Supported Models
+- `examples/workflow_qwenvision_basic.json`
 
-This plugin currently supports models that can be loaded by:
+After import:
 
-- `AutoProcessor.from_pretrained(...)`
-- `AutoModelForImageTextToText.from_pretrained(...)`
-- or fallback `AutoModelForCausalLM.from_pretrained(...)`
+1. Set image in `QwenVisionLoadImageWithPath`.
+2. Keep default model URL or choose local GGUF files.
+3. Queue prompt.
 
-Common choices:
+## Notes
 
-- Built-in remote model:
-  - `Qwen/Qwen3.5-0.8B` (auto-download when selected)
-- Local models:
-  - Any model directory under `<ComfyUI_ROOT>/models/qwenvision/` that is compatible with the APIs above
-
-Notes:
-
-- `trust_remote_code=True` is enabled during model load.
-- Different model revisions may require newer `transformers`.
-
-## Quick Workflow
-
-1. Add `QwenVisionLoader` and choose `model_id/device/dtype`
-2. Connect output `qwen_model` into `QwenVisionRun`
-3. Provide `IMAGE` + `prompt`
-4. Read `text` output
-5. Use `QwenVisionUnload` to release memory when needed
-
-## Example Workflow (ComfyUI Import)
-
-- Example file:
-  - `examples/workflow_qwenvision_basic.json`
-- Import in ComfyUI:
-  - `Load` -> select the JSON file
-- After import:
-  - Change `LoadImage` input image to your own image
-  - Keep `QwenVisionLoader` model as `Qwen/Qwen3.5-0.8B` (or pick local model)
-  - Queue prompt
-
-## Project Structure
-
-- `__init__.py`: ComfyUI entry export
-- `nodes/`: node definitions (`loader.py`, `run.py`, `unload.py`)
-- `qwenvision/cache_manager.py`: global model cache
-- `qwenvision/inference.py`: inference pipeline
-- `qwenvision/image_utils.py`: IMAGE -> PIL conversion
-- `DEVELOPMENT.md`: development rules for openclaw
-
-## GitHub Statements
-
-### Disclaimer
-
-- This project is community-maintained and is not officially affiliated with ComfyUI, Alibaba Cloud, or the Qwen team.
-- No model weights are distributed in this repository.
-
-### Model License Notice
-
-- You must follow each model's upstream license and usage policy on Hugging Face.
-- Commercial usage depends on the specific model license you choose.
-
-### Security Notice
-
-- This project loads remote model code with `trust_remote_code=True`.
-- Only use trusted model repositories.
-
-## Contributing
-
-Issues and PRs are welcome. Please follow `DEVELOPMENT.md`.
-
-## License
-
-No license file is included yet. If you plan to publish publicly, add a license (for example MIT) before release.
+- This project does not ship model weights.
+- Follow upstream model license and usage terms from Hugging Face.
+- This project is community-maintained and not officially affiliated with ComfyUI or Qwen.

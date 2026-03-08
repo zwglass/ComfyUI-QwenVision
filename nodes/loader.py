@@ -5,9 +5,14 @@ import traceback
 
 from ..qwenvision.cache_manager import get_cache_manager
 
-REMOTE_MODEL_OPTIONS = [
-    "Qwen/Qwen3.5-0.8B",
-]
+DEFAULT_MODEL_URL = (
+    "https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct-GGUF/resolve/main/"
+    "Qwen3VL-2B-Instruct-Q4_K_M.gguf"
+)
+DEFAULT_MMPROJ_URL = (
+    "https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct-GGUF/resolve/main/"
+    "mmproj-Qwen3VL-2B-Instruct-F16.gguf"
+)
 
 
 def _resolve_qwenvision_dir() -> str:
@@ -21,36 +26,50 @@ def _resolve_qwenvision_dir() -> str:
         return os.path.join(comfyui_root, "models", "qwenvision")
 
 
-def _scan_local_models() -> list[str]:
+def _scan_local_gguf_files():
     models_dir = _resolve_qwenvision_dir()
     if not os.path.isdir(models_dir):
-        return []
+        return [], []
 
-    local_models: list[str] = []
-    for item in sorted(os.listdir(models_dir)):
-        full_path = os.path.join(models_dir, item)
-        if os.path.isdir(full_path):
-            local_models.append(full_path)
-    return local_models
+    model_files = []
+    mmproj_files = []
+
+    for root, _, files in os.walk(models_dir):
+        for name in sorted(files):
+            if not name.lower().endswith(".gguf"):
+                continue
+            full_path = os.path.join(root, name)
+            if "mmproj" in name.lower():
+                mmproj_files.append(full_path)
+            else:
+                model_files.append(full_path)
+
+    return model_files, mmproj_files
 
 
 def _model_options() -> list[str]:
-    options = _scan_local_models() + REMOTE_MODEL_OPTIONS
-    return options if options else REMOTE_MODEL_OPTIONS
+    local_models, _ = _scan_local_gguf_files()
+    return local_models + [DEFAULT_MODEL_URL]
+
+
+def _mmproj_options() -> list[str]:
+    _, local_mmproj = _scan_local_gguf_files()
+    return local_mmproj + [DEFAULT_MMPROJ_URL]
 
 
 class QwenVisionLoader:
     @classmethod
     def INPUT_TYPES(cls):
-        options = _model_options()
+        model_options = _model_options()
+        mmproj_options = _mmproj_options()
         return {
             "required": {
-                "model_id": (options, {"default": options[0]}),
-                "device": (["auto", "cuda", "cpu"], {"default": "auto"}),
-                "dtype": (
-                    ["auto", "float16", "bfloat16", "float32"],
-                    {"default": "auto"},
+                "model_source": (model_options, {"default": model_options[-1]}),
+                "mmproj_source": (
+                    mmproj_options,
+                    {"default": mmproj_options[-1]},
                 ),
+                "cli_path": ("STRING", {"default": "llama-mtmd-cli"}),
             }
         }
 
@@ -59,29 +78,34 @@ class QwenVisionLoader:
     FUNCTION = "load_model"
     CATEGORY = "Qwen/Vision"
 
-    def load_model(self, model_id: str, device: str, dtype: str):
-        options = _model_options()
-        if model_id not in options:
+    def load_model(self, model_source: str, mmproj_source: str, cli_path: str):
+        model_options = _model_options()
+        mmproj_options = _mmproj_options()
+        if model_source not in model_options:
             return (
                 None,
-                (
-                    "Invalid model_id selection. Choose an existing local model "
-                    "under ComfyUI/models/qwenvision or a built-in downloadable "
-                    "model."
-                ),
+                "Invalid model_source. Choose local .gguf or default download URL.",
+            )
+        if mmproj_source not in mmproj_options:
+            return (
+                None,
+                "Invalid mmproj_source. Choose local mmproj .gguf or default URL.",
             )
 
         manager = get_cache_manager()
         try:
             handle = manager.get_or_load_model(
-                model_id=model_id, device=device, dtype=dtype
+                model_source=model_source,
+                mmproj_source=mmproj_source,
+                cli_path=cli_path.strip() or "llama-mtmd-cli",
             )
             status = (
-                f"Loaded: {handle.model_id} | device={handle.device} | "
-                f"dtype={handle.dtype}"
+                "Loaded GGUF: "
+                f"model={handle.model_path} | mmproj={handle.mmproj_path} | "
+                f"cli={handle.cli_path}"
             )
             return (handle, status)
         except Exception as e:
-            err = f"Failed to load model: {e}"
+            err = f"Failed to load model files: {e}"
             traceback.print_exc()
             return (None, err)

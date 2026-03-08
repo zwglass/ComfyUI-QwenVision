@@ -1,6 +1,4 @@
 torch
-transformers
-accelerate
 Pillow
-sentencepiece
-safetensors
+numpy
+huggingface_hub

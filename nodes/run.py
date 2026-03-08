@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import traceback
 
-from ..qwenvision.image_utils import tensor_to_pil_images
 from ..qwenvision.inference import generate_text
 
 
@@ -17,13 +16,18 @@ class QwenVisionRun:
                     "STRING",
                     {"multiline": True, "default": "Describe this image."},
                 ),
-                "max_new_tokens": ("INT", {"default": 128, "min": 1, "max": 4096}),
+                "max_new_tokens": ("INT", {"default": 1024, "min": 1, "max": 8192}),
+                "temperature": ("FLOAT", {"default": 0.7, "min": 0.0, "max": 2.0}),
+                "top_k": ("INT", {"default": 20, "min": 1, "max": 200}),
+                "top_p": ("FLOAT", {"default": 0.8, "min": 0.0, "max": 1.0}),
+                "ctx_size": ("INT", {"default": 8192, "min": 1024, "max": 262144}),
+                "batch_size": ("INT", {"default": 2048, "min": 32, "max": 8192}),
+                "ubatch_size": ("INT", {"default": 512, "min": 32, "max": 4096}),
+                "no_warmup": ("BOOLEAN", {"default": True}),
+                "timeout_sec": ("INT", {"default": 600, "min": 1, "max": 7200}),
             },
             "optional": {
-                "system_prompt": ("STRING", {"multiline": True, "default": ""}),
-                "temperature": ("FLOAT", {"default": 0.2, "min": 0.0, "max": 2.0}),
-                "top_p": ("FLOAT", {"default": 0.95, "min": 0.0, "max": 1.0}),
-                "do_sample": ("BOOLEAN", {"default": False}),
+                "image_path": ("STRING", {"default": ""}),
             },
         }
 
@@ -38,29 +42,34 @@ class QwenVisionRun:
         image,
         prompt: str,
         max_new_tokens: int,
-        system_prompt: str = "",
-        temperature: float = 0.2,
-        top_p: float = 0.95,
-        do_sample: bool = False,
+        temperature: float,
+        top_k: int,
+        top_p: float,
+        ctx_size: int,
+        batch_size: int,
+        ubatch_size: int,
+        no_warmup: bool,
+        timeout_sec: int,
+        image_path: str = "",
     ):
         if qwen_model is None:
             return ("", "qwen_model is None. Load a model first.")
 
         try:
-            pil_images = tensor_to_pil_images(image)
-            if not pil_images:
-                return ("", "No valid image found in IMAGE input.")
-
-            image_pil = pil_images[0]
             text, debug_info = generate_text(
                 handle=qwen_model,
-                image_pil=image_pil,
+                image_tensor=image,
+                image_path=image_path,
                 prompt=prompt,
-                system_prompt=system_prompt,
                 max_new_tokens=max_new_tokens,
                 temperature=temperature,
+                top_k=top_k,
                 top_p=top_p,
-                do_sample=do_sample,
+                ctx_size=ctx_size,
+                batch_size=batch_size,
+                ubatch_size=ubatch_size,
+                no_warmup=no_warmup,
+                timeout_sec=timeout_sec,
             )
             return (text, debug_info)
         except Exception as e:

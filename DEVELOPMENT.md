@@ -12,14 +12,14 @@
 
 - `__init__.py`
   - 仅导出 `NODE_CLASS_MAPPINGS` 与 `NODE_DISPLAY_NAME_MAPPINGS`。
-- `nodes.py`
-  - 仅放 ComfyUI 节点接口层: `INPUT_TYPES`、`RETURN_TYPES`、`FUNCTION`、`CATEGORY`、节点调度。
-  - 不实现复杂业务逻辑。
+- `nodes/`
+  - 节点接口层: `INPUT_TYPES`、`RETURN_TYPES`、`FUNCTION`、`CATEGORY`、节点调度。
+  - 每个节点独立文件，避免单文件膨胀。
 - `qwenvision/cache_manager.py`
-  - 模型加载、缓存、卸载、设备与 dtype 决策。
+  - GGUF/mmproj 源解析、下载、缓存、卸载。
   - 必须线程安全（当前使用 `Lock`）。
 - `qwenvision/inference.py`
-  - 推理主流程、message 构造、`generate` 参数控制、解码与 debug 信息。
+  - `llama-mtmd-cli` 子进程推理封装、超时控制、输出解析。
 - `qwenvision/image_utils.py`
   - ComfyUI `IMAGE` 到 PIL 的转换与格式兜底。
 - `dev_doc/`
@@ -66,12 +66,11 @@ uv sync
 ## 5. 推理与缓存规范
 
 - 模型加载策略:
-  - 先尝试 `AutoModelForImageTextToText`，失败再回退 `AutoModelForCausalLM`。
+  - 仅支持 GGUF + mmproj 配套加载。
+  - 远程源必须下载到 `ComfyUI/models/qwenvision/` 后再使用。
 - 缓存键必须包含:
-  - `model_id|device|dtype`
-- 任何卸载操作后必须执行显存清理:
-  - `gc.collect()`
-  - `torch.cuda.empty_cache()`（仅 CUDA 可用时）
+  - `model_source|mmproj_source|cli_path`
+- 推理统一通过 `llama-mtmd-cli` 执行，不直接在节点内加载 Transformers 模型。
 - 第一阶段默认单图推理；批量逻辑需单独设计，不得隐式改变现有行为。
 
 ## 6. openclaw 自动开发流程（强制）
@@ -96,7 +95,7 @@ uv sync
 
 ```bash
 PYTHONPYCACHEPREFIX=.pycache uv run python -m compileall .
-PYTHONPYCACHEPREFIX=.pycache uv run python -m py_compile __init__.py nodes.py qwenvision/*.py
+PYTHONPYCACHEPREFIX=.pycache uv run python -m py_compile __init__.py nodes/*.py qwenvision/*.py
 ```
 
 如环境已安装开发工具，再执行:
@@ -119,7 +118,7 @@ uv run isort --check-only .
 
 ## 9. 禁止事项
 
-- 禁止在 `nodes.py` 中堆积大型业务逻辑。
+- 禁止在节点文件中堆积大型业务逻辑（保持“每节点单职责”）。
 - 禁止引入未使用依赖。
 - 禁止无验证直接提交影响模型加载路径的改动。
 - 禁止将调试临时代码（如硬编码模型路径）保留在主分支。
