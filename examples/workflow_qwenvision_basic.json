@@ -1,0 +1,204 @@
+{
+  "last_node_id": 4,
+  "last_link_id": 3,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "LoadImage",
+      "pos": [
+        -780,
+        -20
+      ],
+      "size": [
+        315,
+        314
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            1
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "MASK",
+          "type": "MASK",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoadImage"
+      },
+      "widgets_values": [
+        "example.png",
+        "image"
+      ]
+    },
+    {
+      "id": 2,
+      "type": "QwenVisionLoader",
+      "pos": [
+        -780,
+        -420
+      ],
+      "size": [
+        360,
+        140
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "qwen_model",
+          "type": "QWEN_VISION_MODEL",
+          "links": [
+            2,
+            3
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "status",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "QwenVisionLoader"
+      },
+      "widgets_values": [
+        "Qwen/Qwen3.5-0.8B",
+        "auto",
+        "auto"
+      ]
+    },
+    {
+      "id": 3,
+      "type": "QwenVisionRun",
+      "pos": [
+        -220,
+        -180
+      ],
+      "size": [
+        430,
+        300
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "qwen_model",
+          "type": "QWEN_VISION_MODEL",
+          "link": 2
+        },
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "link": 1
+        }
+      ],
+      "outputs": [
+        {
+          "name": "text",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 0
+        },
+        {
+          "name": "debug_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "QwenVisionRun"
+      },
+      "widgets_values": [
+        "Describe this image in detail.",
+        128,
+        "",
+        0.2,
+        0.95,
+        false
+      ]
+    },
+    {
+      "id": 4,
+      "type": "QwenVisionUnload",
+      "pos": [
+        -220,
+        -470
+      ],
+      "size": [
+        320,
+        110
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "qwen_model",
+          "type": "QWEN_VISION_MODEL",
+          "link": 3
+        }
+      ],
+      "outputs": [
+        {
+          "name": "status",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "QwenVisionUnload"
+      },
+      "widgets_values": [
+        false
+      ]
+    }
+  ],
+  "links": [
+    [
+      1,
+      1,
+      0,
+      3,
+      1,
+      "IMAGE"
+    ],
+    [
+      2,
+      2,
+      0,
+      3,
+      0,
+      "QWEN_VISION_MODEL"
+    ],
+    [
+      3,
+      2,
+      0,
+      4,
+      0,
+      "QWEN_VISION_MODEL"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {},
+  "version": 0.4
+}

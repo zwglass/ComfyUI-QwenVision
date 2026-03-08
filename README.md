@@ -111,6 +111,17 @@ Notes:
 4. Read `text` output
 5. Use `QwenVisionUnload` to release memory when needed
 
+## Example Workflow (ComfyUI Import)
+
+- Example file:
+  - `examples/workflow_qwenvision_basic.json`
+- Import in ComfyUI:
+  - `Load` -> select the JSON file
+- After import:
+  - Change `LoadImage` input image to your own image
+  - Keep `QwenVisionLoader` model as `Qwen/Qwen3.5-0.8B` (or pick local model)
+  - Queue prompt
+
 ## Project Structure
 
 - `__init__.py`: ComfyUI entry export
