@@ -4,7 +4,7 @@ import os
 import time
 from dataclasses import dataclass
 from threading import Lock
-from typing import Dict
+from typing import Dict, Optional
 
 from huggingface_hub import hf_hub_download
 
@@ -60,9 +60,11 @@ class ModelCacheManager:
         revision = parts[3]
         filename = "/".join(parts[4:])
         repo_id = f"{namespace}/{repo_name}"
-        return repo_id, revision, filename, repo_name
+        return repo_id, revision, filename
 
-    def _resolve_source_to_local_file(self, source: str) -> str:
+    def _resolve_source_to_local_file(
+        self, source: str, local_dir: Optional[str] = None
+    ) -> str:
         if os.path.isfile(source):
             return source
 
@@ -73,8 +75,9 @@ class ModelCacheManager:
                 "resolve URL."
             )
 
-        repo_id, revision, filename, repo_name = parsed
-        local_dir = os.path.join(self._resolve_qwenvision_models_dir(), repo_name)
+        repo_id, revision, filename = parsed
+        if local_dir is None:
+            local_dir = self._resolve_qwenvision_models_dir()
         os.makedirs(local_dir, exist_ok=True)
 
         return hf_hub_download(
@@ -84,6 +87,26 @@ class ModelCacheManager:
             local_dir=local_dir,
             local_dir_use_symlinks=False,
         )
+
+    def _resolve_download_folder_for_pair(
+        self, model_source: str, mmproj_source: str
+    ) -> Optional[str]:
+        parsed_model = self._parse_hf_resolve_url(model_source)
+        parsed_mmproj = self._parse_hf_resolve_url(mmproj_source)
+        if parsed_model is None and parsed_mmproj is None:
+            return None
+
+        models_root = self._resolve_qwenvision_models_dir()
+        if parsed_model is not None:
+            _, _, model_filename = parsed_model
+            model_stem = os.path.splitext(os.path.basename(model_filename))[0]
+            folder_name = f"{model_stem}-gguf"
+            return os.path.join(models_root, folder_name)
+
+        _, _, mmproj_filename = parsed_mmproj
+        mmproj_stem = os.path.splitext(os.path.basename(mmproj_filename))[0]
+        folder_name = f"{mmproj_stem}-gguf"
+        return os.path.join(models_root, folder_name)
 
     def get_or_load_model(
         self,
@@ -106,8 +129,15 @@ class ModelCacheManager:
                     cache_key=key,
                 )
 
-            model_path = self._resolve_source_to_local_file(model_source)
-            mmproj_path = self._resolve_source_to_local_file(mmproj_source)
+            pair_dir = self._resolve_download_folder_for_pair(
+                model_source=model_source, mmproj_source=mmproj_source
+            )
+            model_path = self._resolve_source_to_local_file(
+                model_source, local_dir=pair_dir
+            )
+            mmproj_path = self._resolve_source_to_local_file(
+                mmproj_source, local_dir=pair_dir
+            )
 
             self._cache[key] = {
                 "model_path": model_path,

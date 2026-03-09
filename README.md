@@ -41,28 +41,35 @@ llama-mtmd-cli --help
 
 ## Model Download And Storage Path
 
-Default auto-download model source:
+Model pairs should be organized as subfolders under:
 
-- `https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct-GGUF/resolve/main/Qwen3VL-2B-Instruct-Q4_K_M.gguf`
+- `<ComfyUI_ROOT>/models/qwenvision/`
 
-Default auto-download mmproj source:
+Each model folder must:
 
-- `https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct-GGUF/resolve/main/mmproj-Qwen3VL-2B-Instruct-F16.gguf`
+- End with `-gguf`
+- Contain exactly 2 `.gguf` files
+- Include 1 `mmproj` file with filename starting `mmproj-`
+- Include 1 vision model `.gguf` file (non-`mmproj`)
 
-Downloaded files are materialized under:
+Example:
 
-- `<ComfyUI_ROOT>/models/qwenvision/<repo_name>/...`
-
-Local dropdown scan path:
-
-- `<ComfyUI_ROOT>/models/qwenvision/**/*.gguf`
+```text
+models/qwenvision/
+  Qwen3VL-2B-Q4_K_M-gguf/
+    Qwen3VL-2B-Instruct-Q4_K_M.gguf
+    mmproj-Qwen3VL-2B-Instruct-F16.gguf
+```
 
 ## How Inference Works
 
-1. `QwenVisionLoader` resolves GGUF/MMProj sources into local files.
-2. `QwenVisionRun` executes:
+1. `QwenVisionLoader` scans `<ComfyUI_ROOT>/models/qwenvision/*-gguf/` and shows folder names in dropdown.
+2. For each selected folder, loader resolves the paired model:
+   - `model.gguf` (non-`mmproj`)
+   - `mmproj-*.gguf`
+3. `QwenVisionRun` executes:
    - `llama-mtmd-cli -m <model.gguf> --mmproj <mmproj.gguf> --image <path> -p <prompt> ...`
-3. Output text is returned to ComfyUI as `STRING`.
+4. Output text is returned to ComfyUI as `STRING`.
 
 ## Example Workflow
 
@@ -73,8 +80,9 @@ Import:
 After import:
 
 1. Set image in `QwenVisionLoadImageWithPath`.
-2. Keep default model URL or choose local GGUF files.
-3. Queue prompt.
+2. Create a `*-gguf` folder under `<ComfyUI_ROOT>/models/qwenvision/` and place paired model files inside.
+3. Select that folder name in `QwenVisionLoader`.
+4. Queue prompt.
 
 ## Notes
 
