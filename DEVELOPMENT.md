@@ -16,10 +16,10 @@
   - 节点接口层: `INPUT_TYPES`、`RETURN_TYPES`、`FUNCTION`、`CATEGORY`、节点调度。
   - 每个节点独立文件，避免单文件膨胀。
 - `qwenvision/cache_manager.py`
-  - GGUF/mmproj 源解析、下载、缓存、卸载。
+  - Transformers 模型与 processor 的加载、缓存、卸载。
   - 必须线程安全（当前使用 `Lock`）。
 - `qwenvision/inference.py`
-  - `llama-mtmd-cli` 子进程推理封装、超时控制、输出解析。
+  - `transformers` 推理封装、输入构造、输出解析。
 - `qwenvision/image_utils.py`
   - ComfyUI `IMAGE` 到 PIL 的转换与格式兜底。
 - `dev_doc/`
@@ -66,11 +66,10 @@ uv sync
 ## 5. 推理与缓存规范
 
 - 模型加载策略:
-  - 仅支持 GGUF + mmproj 配套加载。
-  - 远程源必须下载到 `ComfyUI/models/qwenvision/` 后再使用。
+  - 支持 Hugging Face 模型 ID 或本地 Transformers 模型目录。
 - 缓存键必须包含:
-  - `model_source|mmproj_source|cli_path`
-- 推理统一通过 `llama-mtmd-cli` 执行，不直接在节点内加载 Transformers 模型。
+  - `model_source|dtype|device_map|attn_implementation`
+- 推理统一通过 `transformers` 执行，模型在 ComfyUI 进程内复用。
 - 第一阶段默认单图推理；批量逻辑需单独设计，不得隐式改变现有行为。
 
 ## 6. openclaw 自动开发流程（强制）

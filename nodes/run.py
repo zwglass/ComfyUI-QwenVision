@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import traceback
 
+from ..qwenvision.cache_manager import get_cache_manager
 from ..qwenvision.inference import generate_text
 
 
@@ -20,10 +21,7 @@ class QwenVisionRun:
                 "temperature": ("FLOAT", {"default": 0.7, "min": 0.0, "max": 2.0}),
                 "top_k": ("INT", {"default": 20, "min": 1, "max": 200}),
                 "top_p": ("FLOAT", {"default": 0.8, "min": 0.0, "max": 1.0}),
-                "ctx_size": ("INT", {"default": 8192, "min": 1024, "max": 262144}),
-                "batch_size": ("INT", {"default": 2048, "min": 32, "max": 8192}),
-                "ubatch_size": ("INT", {"default": 512, "min": 32, "max": 4096}),
-                "no_warmup": ("BOOLEAN", {"default": True}),
+                "keep_model_loaded": ("BOOLEAN", {"default": True}),
                 "timeout_sec": ("INT", {"default": 600, "min": 1, "max": 7200}),
             },
             "optional": {
@@ -45,10 +43,7 @@ class QwenVisionRun:
         temperature: float,
         top_k: int,
         top_p: float,
-        ctx_size: int,
-        batch_size: int,
-        ubatch_size: int,
-        no_warmup: bool,
+        keep_model_loaded: bool,
         timeout_sec: int,
         image_path: str = "",
     ):
@@ -65,13 +60,13 @@ class QwenVisionRun:
                 temperature=temperature,
                 top_k=top_k,
                 top_p=top_p,
-                ctx_size=ctx_size,
-                batch_size=batch_size,
-                ubatch_size=ubatch_size,
-                no_warmup=no_warmup,
                 timeout_sec=timeout_sec,
             )
             return (text, debug_info)
         except Exception as e:
             traceback.print_exc()
             return ("", f"Run failed: {e}")
+        finally:
+            if not keep_model_loaded:
+                manager = get_cache_manager()
+                manager.unload_by_key(qwen_model.cache_key)

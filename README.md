@@ -1,11 +1,11 @@
 # ComfyUI-QwenVision
 
-ComfyUI custom nodes for Qwen3-VL GGUF inference through `llama-mtmd-cli`.
+ComfyUI custom nodes for Qwen3-VL inference through `transformers`.
 
 ## Features
 
-- GGUF + `mmproj` model loader with local cache
-- Inference via subprocess (`llama-mtmd-cli`)
+- Transformers-based model loader with in-process cache
+- Model stays loaded in the ComfyUI Python process across runs
 - Image loader node with explicit `image_path` output
 - Automatic fallback: if `image_path` is missing, node saves a temp image
 
@@ -25,7 +25,7 @@ cd <ComfyUI_ROOT>/custom_nodes
 git clone https://github.com/zwglass/ComfyUI-QwenVision.git
 ```
 
-2. Install dependencies (recommended: `uv`):
+2. Install dependencies:
 
 ```bash
 cd <ComfyUI_ROOT>/custom_nodes/ComfyUI-QwenVision
@@ -33,59 +33,52 @@ uv venv
 uv sync
 ```
 
-3. Ensure `llama-mtmd-cli` is installed and in `PATH`:
+3. Ensure your environment can load the model with `transformers`:
 
 ```bash
-llama-mtmd-cli --help
-```
-
-## Model Download And Storage Path
-
-Model pairs should be organized as subfolders under:
-
-- `<ComfyUI_ROOT>/models/qwenvision/`
-
-Each model folder must:
-
-- End with `-gguf`
-- Contain exactly 2 `.gguf` files
-- Include 1 `mmproj` file with filename starting `mmproj-`
-- Include 1 vision model `.gguf` file (non-`mmproj`)
-
-Example:
-
-```text
-models/qwenvision/
-  Qwen3VL-2B-Q4_K_M-gguf/
-    Qwen3VL-2B-Instruct-Q4_K_M.gguf
-    mmproj-Qwen3VL-2B-Instruct-F16.gguf
+python -c "from transformers import AutoProcessor"
 ```
 
 ## How Inference Works
 
-1. `QwenVisionLoader` scans `<ComfyUI_ROOT>/models/qwenvision/*-gguf/` and shows folder names in dropdown.
-2. For each selected folder, loader resolves the paired model:
-   - `model.gguf` (non-`mmproj`)
-   - `mmproj-*.gguf`
-3. `QwenVisionRun` executes:
-   - `llama-mtmd-cli -m <model.gguf> --mmproj <mmproj.gguf> --image <path> -p <prompt> ...`
-4. Output text is returned to ComfyUI as `STRING`.
+1. `QwenVisionLoader` loads a Hugging Face model ID or local Transformers model path.
+2. The loaded `model`, `processor`, and Comfy `ModelPatcher` stay cached in the ComfyUI process.
+3. `QwenVisionRun` asks ComfyUI to load the patcher onto the active device, then calls `model.generate(...)`.
+4. `QwenVisionUnload` releases the cached runtime through ComfyUI's model management path.
 
-## Example Workflow
+## Loader Inputs
 
-Import:
+- `model_source`: Hugging Face model ID or local model path
+- `dtype`: `auto`, `float16`, `bfloat16`, `float32`
+- `device_map`: target device for ComfyUI model management, not Hugging Face `accelerate` sharding
+- `attn_implementation`: `default`, `flash_attention_2`, `sdpa`, `eager`
 
-- `examples/workflow_qwenvision_basic.json`
+`device_map` examples:
 
-After import:
+- `auto`: let ComfyUI choose the current torch device
+- `cuda:0`: pin the model to a specific CUDA device when loaded for inference
+- `cpu`: keep inference on CPU
 
-1. Set image in `QwenVisionLoadImageWithPath`.
-2. Create a `*-gguf` folder under `<ComfyUI_ROOT>/models/qwenvision/` and place paired model files inside.
-3. Select that folder name in `QwenVisionLoader`.
-4. Queue prompt.
+The node no longer passes `device_map` through to Transformers `from_pretrained(..., device_map=...)`. Models are wrapped with ComfyUI's `ModelPatcher` so the built-in "clear VRAM" flow can unload them correctly.
+
+Default example:
+
+```text
+Qwen/Qwen3-VL-30B-A3B-Instruct
+```
+
+## Run Inputs
+
+- `prompt`
+- `max_new_tokens`
+- `temperature`
+- `top_k`
+- `top_p`
+- `image` / optional `image_path`
 
 ## Notes
 
+- This project no longer uses `llama-mtmd-cli`.
+- Large multimodal models may require substantial VRAM.
+- `flash_attention_2` depends on your Torch/CUDA environment.
 - This project does not ship model weights.
-- Follow upstream model license and usage terms from Hugging Face.
-- This project is community-maintained and not officially affiliated with ComfyUI or Qwen.

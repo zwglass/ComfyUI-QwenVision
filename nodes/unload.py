@@ -24,11 +24,13 @@ class QwenVisionUnload:
         manager = get_cache_manager()
 
         if unload_all:
-            manager.unload_all()
-            return ("Unloaded all cached Qwen vision models.",)
+            unload_count = manager.unload_all()
+            return (f"Unloaded {unload_count} cached Transformers model(s).",)
 
         if qwen_model is None:
             return ("No model handle provided.",)
 
-        manager.unload_by_key(qwen_model.cache_key)
+        unloaded = manager.unload_by_key(qwen_model.cache_key)
+        if not unloaded:
+            return (f"Model was not cached: {qwen_model.cache_key}",)
         return (f"Unloaded model: {qwen_model.cache_key}",)

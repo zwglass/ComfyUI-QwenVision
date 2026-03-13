@@ -1,22 +1,58 @@
 from __future__ import annotations
 
-import os
+import gc
 import time
 from dataclasses import dataclass
 from threading import Lock
-from typing import Dict, Optional
+from typing import Any, Dict
 
-from huggingface_hub import hf_hub_download
+import torch
+from transformers import AutoConfig, AutoProcessor
+
+from .managed_model import QwenVisionManagedModel
+
+try:
+    import comfy.model_management as mm
+except Exception:
+    mm = None
+
+try:
+    import comfy.model_patcher as mp
+except Exception:
+    mp = None
+
+
+def _resolve_model_class(model_source: str):
+    import transformers
+
+    config = AutoConfig.from_pretrained(model_source)
+    model_type = getattr(config, "model_type", "")
+
+    if model_type == "qwen3_vl":
+        if hasattr(transformers, "Qwen3VLForConditionalGeneration"):
+            return transformers.Qwen3VLForConditionalGeneration
+    if model_type == "qwen3_vl_moe":
+        if hasattr(transformers, "Qwen3VLMoeForConditionalGeneration"):
+            return transformers.Qwen3VLMoeForConditionalGeneration
+
+    if hasattr(transformers, "AutoModelForImageTextToText"):
+        return transformers.AutoModelForImageTextToText
+    if hasattr(transformers, "AutoModelForVision2Seq"):
+        return transformers.AutoModelForVision2Seq
+    raise RuntimeError(
+        "No supported vision-language model loader found in transformers "
+        f"for model_type={model_type!r}."
+    )
 
 
 @dataclass
 class QwenVisionModelHandle:
-    model_path: str
-    mmproj_path: str
     model_source: str
-    mmproj_source: str
-    cli_path: str
     cache_key: str
+    dtype: str
+    device_map: str
+    attn_implementation: str
+    was_reused: bool = False
 
 
 class ModelCacheManager:
@@ -24,156 +60,216 @@ class ModelCacheManager:
         self._cache: Dict[str, dict] = {}
         self._lock = Lock()
 
-    def _make_cache_key(
-        self, model_source: str, mmproj_source: str, cli_path: str
-    ) -> str:
-        return f"{model_source}|{mmproj_source}|{cli_path}"
-
-    def _resolve_qwenvision_models_dir(self) -> str:
+    def _resolve_target_device(self, device_map: str) -> torch.device:
+        if device_map and device_map != "auto":
+            return torch.device(device_map)
+        if mm is None:
+            return torch.device("cuda" if torch.cuda.is_available() else "cpu")
         try:
-            import folder_paths
-
-            models_dir = os.path.join(folder_paths.models_dir, "qwenvision")
+            return mm.get_torch_device()
         except Exception:
-            repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-            comfyui_root = os.path.abspath(os.path.join(repo_root, "..", ".."))
-            models_dir = os.path.join(comfyui_root, "models", "qwenvision")
+            return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        os.makedirs(models_dir, exist_ok=True)
-        return models_dir
-
-    def _parse_hf_resolve_url(self, source: str):
-        # Example:
-        # https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct-GGUF/resolve/main/xxx.gguf
-        prefix = "https://huggingface.co/"
-        if not source.startswith(prefix):
-            return None
-
-        parts = source[len(prefix) :].split("/")
-        if len(parts) < 5:
-            return None
-        if parts[2] != "resolve":
-            return None
-
-        namespace = parts[0]
-        repo_name = parts[1]
-        revision = parts[3]
-        filename = "/".join(parts[4:])
-        repo_id = f"{namespace}/{repo_name}"
-        return repo_id, revision, filename
-
-    def _resolve_source_to_local_file(
-        self, source: str, local_dir: Optional[str] = None
+    def _make_cache_key(
+        self,
+        model_source: str,
+        dtype: str,
+        device_map: str,
+        attn_implementation: str,
     ) -> str:
-        if os.path.isfile(source):
-            return source
-
-        parsed = self._parse_hf_resolve_url(source)
-        if parsed is None:
-            raise RuntimeError(
-                "Unsupported source. Use a local .gguf path or a huggingface "
-                "resolve URL."
-            )
-
-        repo_id, revision, filename = parsed
-        if local_dir is None:
-            local_dir = self._resolve_qwenvision_models_dir()
-        os.makedirs(local_dir, exist_ok=True)
-
-        return hf_hub_download(
-            repo_id=repo_id,
-            filename=filename,
-            revision=revision,
-            local_dir=local_dir,
-            local_dir_use_symlinks=False,
+        return (
+            f"{model_source}|{dtype}|{device_map}|{attn_implementation}"
         )
 
-    def _resolve_download_folder_for_pair(
-        self, model_source: str, mmproj_source: str
-    ) -> Optional[str]:
-        parsed_model = self._parse_hf_resolve_url(model_source)
-        parsed_mmproj = self._parse_hf_resolve_url(mmproj_source)
-        if parsed_model is None and parsed_mmproj is None:
-            return None
+    def _load_runtime(
+        self,
+        model_source: str,
+        dtype: str,
+        device_map: str,
+        attn_implementation: str,
+    ) -> tuple[Any, Any, Any, str]:
+        model_class = _resolve_model_class(model_source)
+        torch_dtype = dtype if dtype == "auto" else getattr(torch, dtype)
+        target_device = self._resolve_target_device(device_map)
+        load_kwargs = {"torch_dtype": torch_dtype}
+        if attn_implementation != "default":
+            load_kwargs["attn_implementation"] = attn_implementation
 
-        models_root = self._resolve_qwenvision_models_dir()
-        if parsed_model is not None:
-            _, _, model_filename = parsed_model
-            model_stem = os.path.splitext(os.path.basename(model_filename))[0]
-            folder_name = f"{model_stem}-gguf"
-            return os.path.join(models_root, folder_name)
+        hf_model = model_class.from_pretrained(model_source, **load_kwargs)
+        hf_model.eval()
+        model = QwenVisionManagedModel(hf_model, initial_device=torch.device("cpu"))
+        if mm is not None:
+            mm.archive_model_dtypes(model)
+        processor = AutoProcessor.from_pretrained(model_source)
 
-        _, _, mmproj_filename = parsed_mmproj
-        mmproj_stem = os.path.splitext(os.path.basename(mmproj_filename))[0]
-        folder_name = f"{mmproj_stem}-gguf"
-        return os.path.join(models_root, folder_name)
+        if mp is None:
+            return model, processor, None, str(target_device)
+
+        offload_device = target_device if target_device.type == "cpu" else torch.device("cpu")
+        patcher = mp.ModelPatcher(
+            model,
+            load_device=target_device,
+            offload_device=offload_device,
+        )
+        return model, processor, patcher, str(target_device)
+
+    def _make_handle(
+        self,
+        entry: dict,
+        cache_key: str,
+        *,
+        was_reused: bool,
+    ) -> QwenVisionModelHandle:
+        return QwenVisionModelHandle(
+            model_source=entry["model_source"],
+            cache_key=cache_key,
+            dtype=entry["dtype"],
+            device_map=entry["device_map"],
+            attn_implementation=entry["attn_implementation"],
+            was_reused=was_reused,
+        )
 
     def get_or_load_model(
         self,
         model_source: str,
-        mmproj_source: str,
-        cli_path: str = "llama-mtmd-cli",
+        dtype: str = "auto",
+        device_map: str = "auto",
+        attn_implementation: str = "default",
     ) -> QwenVisionModelHandle:
-        key = self._make_cache_key(model_source, mmproj_source, cli_path)
+        key = self._make_cache_key(
+            model_source=model_source,
+            dtype=dtype,
+            device_map=device_map,
+            attn_implementation=attn_implementation,
+        )
 
         with self._lock:
             if key in self._cache:
-                self._cache[key]["last_used"] = time.time()
                 entry = self._cache[key]
-                return QwenVisionModelHandle(
-                    model_path=entry["model_path"],
-                    mmproj_path=entry["mmproj_path"],
-                    model_source=entry["model_source"],
-                    mmproj_source=entry["mmproj_source"],
-                    cli_path=entry["cli_path"],
-                    cache_key=key,
-                )
+                entry["last_used"] = time.time()
+                return self._make_handle(entry, key, was_reused=True)
 
-            pair_dir = self._resolve_download_folder_for_pair(
-                model_source=model_source, mmproj_source=mmproj_source
+            model, processor, patcher, resolved_device = self._load_runtime(
+                model_source=model_source,
+                dtype=dtype,
+                device_map=device_map,
+                attn_implementation=attn_implementation,
             )
-            model_path = self._resolve_source_to_local_file(
-                model_source, local_dir=pair_dir
-            )
-            mmproj_path = self._resolve_source_to_local_file(
-                mmproj_source, local_dir=pair_dir
-            )
-
             self._cache[key] = {
-                "model_path": model_path,
-                "mmproj_path": mmproj_path,
                 "model_source": model_source,
-                "mmproj_source": mmproj_source,
-                "cli_path": cli_path,
+                "model": model,
+                "processor": processor,
+                "patcher": patcher,
+                "dtype": dtype,
+                "device_map": resolved_device,
+                "attn_implementation": attn_implementation,
                 "last_used": time.time(),
             }
+            return self._make_handle(self._cache[key], key, was_reused=False)
 
-            return QwenVisionModelHandle(
-                model_path=model_path,
-                mmproj_path=mmproj_path,
-                model_source=model_source,
-                mmproj_source=mmproj_source,
-                cli_path=cli_path,
-                cache_key=key,
-            )
-
-    def unload_by_key(self, cache_key: str) -> None:
+    def get_runtime_by_key(self, cache_key: str) -> tuple[Any, Any, Any, dict]:
         with self._lock:
-            self._cache.pop(cache_key, None)
+            entry = self._cache.get(cache_key)
+            if entry is None:
+                raise RuntimeError(
+                    "Model runtime was not found in cache. Load the model again."
+                )
+            model = entry.get("model")
+            processor = entry.get("processor")
+            patcher = entry.get("patcher")
+            if model is None or processor is None:
+                raise RuntimeError(
+                    "Model runtime has been unloaded. Load the model again."
+                )
+            entry["last_used"] = time.time()
+            metadata = {
+                "model_source": entry["model_source"],
+                "dtype": entry["dtype"],
+                "device_map": entry["device_map"],
+                "attn_implementation": entry["attn_implementation"],
+            }
+            return model, processor, patcher, metadata
 
-    def unload_all(self) -> None:
+    def _unload_patcher(self, patcher: Any) -> None:
+        if patcher is None:
+            return
+
+        unloaded = False
+        if mm is not None:
+            try:
+                for i in range(len(mm.current_loaded_models) - 1, -1, -1):
+                    loaded_model = mm.current_loaded_models[i]
+                    if loaded_model.model is not patcher:
+                        continue
+                    loaded_model.model_unload()
+                    mm.current_loaded_models.pop(i)
+                    unloaded = True
+            except Exception:
+                unloaded = False
+
+        if not unloaded:
+            try:
+                patcher.detach(unpatch_all=True)
+            except Exception:
+                pass
+
+    def _dispose_entry(self, entry: dict) -> None:
+        model = entry.pop("model", None)
+        processor = entry.pop("processor", None)
+        patcher = entry.pop("patcher", None)
+        entry["model"] = None
+        entry["processor"] = None
+        entry["patcher"] = None
+        self._unload_patcher(patcher)
+        if model is not None:
+            try:
+                model.to("cpu")
+            except Exception:
+                pass
+        if model is not None:
+            del model
+        if processor is not None:
+            del processor
+        if patcher is not None:
+            del patcher
+        gc.collect()
+        if mm is not None:
+            try:
+                mm.cleanup_models()
+                mm.soft_empty_cache()
+                return
+            except Exception:
+                pass
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            if hasattr(torch.cuda, "ipc_collect"):
+                torch.cuda.ipc_collect()
+            torch.cuda.synchronize()
+
+    def unload_by_key(self, cache_key: str) -> bool:
         with self._lock:
+            entry = self._cache.pop(cache_key, None)
+        if entry is None:
+            return False
+        self._dispose_entry(entry)
+        return True
+
+    def unload_all(self) -> int:
+        with self._lock:
+            entries = list(self._cache.values())
             self._cache.clear()
+        for entry in entries:
+            self._dispose_entry(entry)
+        return len(entries)
 
     def get_cache_status(self):
         with self._lock:
             return {
                 key: {
-                    "model_path": value["model_path"],
-                    "mmproj_path": value["mmproj_path"],
                     "model_source": value["model_source"],
-                    "mmproj_source": value["mmproj_source"],
-                    "cli_path": value["cli_path"],
+                    "dtype": value["dtype"],
+                    "device_map": value["device_map"],
+                    "attn_implementation": value["attn_implementation"],
                     "last_used": value["last_used"],
                 }
                 for key, value in self._cache.items()

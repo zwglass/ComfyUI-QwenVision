@@ -53,9 +53,6 @@
         0.7,
         20,
         0.8,
-        8192,
-        2048,
-        512,
         true,
         600,
         ""
@@ -94,8 +91,10 @@
         "Node name for S&R": "QwenVisionLoader"
       },
       "widgets_values": [
-        "Qwen3VL-2B-Instruct-Q4_K_M-gguf",
-        "llama-mtmd-cli"
+        "Qwen/Qwen3-VL-30B-A3B-Instruct",
+        "auto",
+        "auto",
+        "default"
       ]
     },
     {
